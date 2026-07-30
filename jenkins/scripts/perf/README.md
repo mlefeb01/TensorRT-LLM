@@ -245,6 +245,32 @@ Shared module imported by `get_post_merge_html.py`, `get_pre_merge_html.py`, and
 - **HTML dashboard**: `generate_post_merge_html()` produces a full interactive
   report with three-way cascading filters and click-to-inspect data-point popups.
 
+## BOLT build-variant baselines
+
+When a build under test has LLVM BOLT profiles applied, its binary layout (and
+therefore its host-side perf) differs from a normal build. To keep the two from
+contaminating each other's rolling baselines, bolted runs are tagged and
+compared only against same-variant history.
+
+- **Mechanism:** `tests/integration/defs/perf/bolt_variant.py` reads the
+  `TRTLLM_BOLT_VARIANT` env var (e.g. `bolt`). When set, `test_perf_sanity.py`
+  adds `s_bolt_variant` to each uploaded record and appends it to the baseline
+  `match_keys`, so a bolted run only matches bolted history.
+- **Inert by default:** when `TRTLLM_BOLT_VARIANT` is unset (every normal
+  build), records and baseline matching are byte-for-byte unchanged. CI carries
+  the var into the test container via the `runLLMTestlistWithSbatch` env
+  passthrough in `jenkins/L0_Test.groovy`; it is empty until BOLT is activated
+  for an architecture.
+- **Cold-start safety:** a new variant (or a fresh branch) has no matching
+  history. The baseline falls back to the run's own value, so the first bolted
+  runs report no regression rather than failing — the gate is meaningful only
+  once the variant's rolling window is seeded by post-merge runs.
+- **No new metrics required:** BOLT is a host-side layout optimization, so the
+  existing throughput/latency metrics catch regressions. The host-overhead
+  configs in `tests/scripts/perf-sanity/aggregated/host_perf_*.yaml` are the
+  most sensitive points. Gating those configs on host metrics (ITL/TPOT) and
+  one-time un-bolted-vs-bolted A/B quantification are tracked as a follow-up.
+
 ## MPI/PMI Handling in Disaggregated Tests
 
 ### Background

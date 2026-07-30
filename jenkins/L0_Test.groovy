@@ -1751,7 +1751,13 @@ def runLLMTestlistWithSbatch(pipeline, platform, testList, config=VANILLA_CONFIG
                     'BUILD_URL',
                     'JOB_NAME',
                     'globalVars',
-                    'gitlabCommit'
+                    'gitlabCommit',
+                    // BOLT regression: when the build under test is BOLT-optimized,
+                    // this carries the variant (e.g. "bolt") into the test container so
+                    // perf-sanity records are tagged and compared only against
+                    // same-variant baselines. Unset for normal builds (empty -> no-op),
+                    // so this passthrough is inert until BOLT is activated for an arch.
+                    'TRTLLM_BOLT_VARIANT'
                 ]
                 def envVarsToExport = [:]
                 envVarNames.each { varName ->

@@ -35,6 +35,7 @@ from tensorrt_llm._utils import get_free_port
 
 from ..conftest import get_llm_root, llm_models_root
 from ._model_paths import MODEL_PATH_DICT as _MODEL_PATH_DICT_BASE
+from .bolt_variant import apply_bolt_variant
 from .perf_regression_utils import process_and_upload_test_results
 
 # Sanity-side path differs from test_perf for this key; preserve historical value.
@@ -2471,6 +2472,10 @@ class PerfSanityTestConfig:
             )
             if has_spec_decoding:
                 regression_metrics.append("d_al")
+
+        # Tag bolted builds so their perf records compare only against bolted
+        # history (no-op for normal, un-bolted builds; see bolt_variant.py).
+        match_keys = apply_bolt_variant(extra_fields, match_keys)
 
         process_and_upload_test_results(
             new_data_dict=new_data_dict,
