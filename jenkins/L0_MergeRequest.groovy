@@ -216,7 +216,7 @@ def BOLT_CONSUME = "bolt_consume"
 // `"bolt_consume": true` opts in a single run without one. Either way
 // resolveBoltConsume() still applies the post-merge and branch restrictions.
 @Field
-def ENABLE_BOLT_PREMERGE_CONSUME = false
+def ENABLE_BOLT_PREMERGE_CONSUME = true   // VALIDATION BRANCH -- do not merge
 // Version-controlled rollout switch for post-merge BOLT, same idiom as above.
 //
 // Post-merge cannot use the pre-merge shape, where the BOLTed build REPLACES the
@@ -228,7 +228,7 @@ def ENABLE_BOLT_PREMERGE_CONSUME = false
 // Off until the consumers that read bolted-<tarName> land, so flipping it on is
 // a reviewed code change rather than a side effect of this one.
 @Field
-def ENABLE_BOLT_POSTMERGE_VARIANT = false
+def ENABLE_BOLT_POSTMERGE_VARIANT = true  // VALIDATION BRANCH -- do not merge
 
 def testFilter = [
     (REUSE_TEST): gitlabParamsFromBot.get(REUSE_TEST, null),
@@ -309,7 +309,9 @@ def globalVars = [
     (RELEASE_TARGET): runMode == "nightly_release" ?
         normalizeReleaseTargets(gitlabParamsFromBot.get(RELEASE_TARGET, null)) : [],
     (BOLT_PROFILE_REF): "",
-    (BOLT_PUBLISH_VARIANT): (env.JOB_NAME ==~ /.*PostMerge.*/) && ENABLE_BOLT_POSTMERGE_VARIANT,
+    // VALIDATION BRANCH: JOB_NAME gate dropped so pre-merge publishes and
+    // consumes bolted-<tarName> exactly as post-merge would.
+    (BOLT_PUBLISH_VARIANT): ENABLE_BOLT_POSTMERGE_VARIANT,
     (BOLT_PROFILE_BRANCH): "",
 ]
 globalVars[BUILD_BRANCH] = resolveBuildBranch(globalVars)
@@ -2013,7 +2015,9 @@ def resolveBuildBranch(globalVars)
 // build.
 def resolveBoltProfileRef(String branch, String triple = "aarch64-linux-gnu")
 {
-    if (!(env.JOB_NAME ==~ /.*PostMerge.*/)) {
+    // VALIDATION BRANCH: post-merge gate removed so a pre-merge PR run resolves
+    // a pin and exercises the whole post-merge path. Restore before merging.
+    if (false) {
         return ""
     }
     def ref = ""
