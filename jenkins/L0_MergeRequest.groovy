@@ -217,6 +217,18 @@ def BOLT_CONSUME = "bolt_consume"
 // resolveBoltConsume() still applies the post-merge and branch restrictions.
 @Field
 def ENABLE_BOLT_PREMERGE_CONSUME = false
+// Version-controlled rollout switch for post-merge BOLT, same idiom as above.
+//
+// Post-merge cannot use the pre-merge shape, where the BOLTed build REPLACES the
+// canonical tarball: that tarball is BoltProfileGen's input and must stay
+// un-BOLTed, or the next bundle is generated from already-optimized binaries.
+// So post-merge publishes BOTH -- canonical untouched, plus bolted-<tarName>
+// carrying a bolt.ref property naming the bundle applied.
+//
+// Off until the consumers that read bolted-<tarName> land, so flipping it on is
+// a reviewed code change rather than a side effect of this one.
+@Field
+def ENABLE_BOLT_POSTMERGE_VARIANT = false
 
 def testFilter = [
     (REUSE_TEST): gitlabParamsFromBot.get(REUSE_TEST, null),
@@ -268,6 +280,13 @@ def BOLT_CONSUME_BUILD = "bolt_consume_build"
 // unpinned, i.e. today's read-`latest`-per-consumer behaviour.
 @Field
 def BOLT_PROFILE_REF = "bolt_profile_ref"
+// Whether this run's build publishes bolted-<tarName> beside an untouched
+// canonical. Decided once: the build needs it to know what to publish, and the
+// test stages need it to know what to fetch. Two copies of the condition would
+// eventually disagree, and the failure would be tests silently reading the
+// un-BOLTed tarball -- indistinguishable from a healthy run.
+@Field
+def BOLT_PUBLISH_VARIANT = "bolt_publish_variant"
 // The branch whose promote directory holds that bundle. A ref alone does not
 // address an object -- the path is <branch>/<triple>/bolt-profile-<ref>-<triple>
 // -- and consumers used to supply the branch themselves from four different
@@ -290,14 +309,23 @@ def globalVars = [
     (RELEASE_TARGET): runMode == "nightly_release" ?
         normalizeReleaseTargets(gitlabParamsFromBot.get(RELEASE_TARGET, null)) : [],
     (BOLT_PROFILE_REF): "",
+    (BOLT_PUBLISH_VARIANT): (env.JOB_NAME ==~ /.*PostMerge.*/) && ENABLE_BOLT_POSTMERGE_VARIANT,
     (BOLT_PROFILE_BRANCH): "",
 ]
 globalVars[BUILD_BRANCH] = resolveBuildBranch(globalVars)
 // Compare against "true" rather than relying on Groovy truthiness: the bot phrase
 // is free-form JSON, and a quoted "false" would otherwise read as opt-in.
+// globalVars[BOLT_PUBLISH_VARIANT], not the raw ENABLE_BOLT_POSTMERGE_VARIANT:
+// the raw flag carries no job scope, so ORing it into `requested` would make
+// every PRE-merge job targeting main pass resolveBoltConsume and start
+// consuming in the replace-canonical shape. That silently takes over what
+// ENABLE_BOLT_PREMERGE_CONSUME governs, and pre-merge behaviour is supposed to
+// be untouched by this work. The globalVars value is already PostMerge-scoped.
 globalVars[BOLT_CONSUME_BUILD] = resolveBoltConsume(
-    ENABLE_BOLT_PREMERGE_CONSUME || gitlabParamsFromBot.get(BOLT_CONSUME, false).toString() == "true",
-    globalVars[TARGET_BRANCH])
+    ENABLE_BOLT_PREMERGE_CONSUME || globalVars[BOLT_PUBLISH_VARIANT] ||
+        gitlabParamsFromBot.get(BOLT_CONSUME, false).toString() == "true",
+    globalVars[TARGET_BRANCH],
+    globalVars[BOLT_PUBLISH_VARIANT])
 if (runMode == "nightly_release") {
     globalVars[TRTLLM_VERSION_OVERRIDE] = params.version
 }
@@ -2012,12 +2040,17 @@ def resolveBoltProfileRef(String branch, String triple = "aarch64-linux-gnu")
     return ref
 }
 
-def resolveBoltConsume(boolean requested, String targetBranch)
+def resolveBoltConsume(boolean requested, String targetBranch, boolean postMergeVariant = false)
 {
     if (!requested) {
         return false
     }
-    if (env.JOB_NAME ==~ /.*PostMerge.*/) {
+    // Post-merge is allowed only in the publish-both shape. The exclusion exists
+    // to protect BoltProfileGen's input, and publishing the optimized build under
+    // a second name protects it just as well as not building one -- canonical is
+    // still the un-BOLTed tarball the producer profiles. Without that shape the
+    // build would replace canonical, which is what the exclusion forbids.
+    if ((env.JOB_NAME ==~ /.*PostMerge.*/) && !postMergeVariant) {
         echo "BOLT consume requested but disabled: the post-merge build is the un-BOLTed input BoltProfileGen profiles."
         return false
     }
@@ -2214,6 +2247,10 @@ def launchStages(pipeline, reuseBuild, testFilter, enableFailFast, globalVars)
                         // profile bundle so the tests below exercise bolted binaries.
                         // Off unless resolveBoltConsume() allowed it (pre-merge, main).
                         'boltConsume': globalVars[BOLT_CONSUME_BUILD],
+                        // Publish the BOLTed build beside an untouched canonical rather
+                        // than replacing it. Post-merge only: canonical is the un-BOLTed
+                        // tarball BoltProfileGen profiles.
+                        'boltPublishVariant': globalVars[BOLT_PUBLISH_VARIANT],
                     ]
                     // launchJob returns UNSTABLE (without throwing) when the build
                     // sub-job was infra-incomplete: only infra aborts, no genuine
@@ -2396,9 +2433,10 @@ def launchStages(pipeline, reuseBuild, testFilter, enableFailFast, globalVars)
                     def additionalParameters = [
                         "dockerImage": globalVars["LLM_SBSA_DOCKER_IMAGE"],
                         // Off unless resolveBoltConsume() allowed it. Post-merge is
-                        // excluded there precisely because this tarball is what the
-                        // BOLT-Profile-Gen stage below profiles.
+                        // allowed only together with boltPublishVariant below, which
+                        // keeps canonical -- the BOLT-Profile-Gen input -- un-BOLTed.
                         'boltConsume': globalVars[BOLT_CONSUME_BUILD],
+                        'boltPublishVariant': globalVars[BOLT_PUBLISH_VARIANT],
                     ]
                     // launchJob returns UNSTABLE (without throwing) when the build
                     // sub-job was infra-incomplete: only infra aborts, no genuine
